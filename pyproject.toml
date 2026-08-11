@@ -1,7 +1,21 @@
 [project]
 name = "cminbpe"
 version = "0.1.0"
-requires-python = ">=3.12"
+description = "A minimal BPE tokenizer implementation with c extensions for speed."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "abiget", email = "getachewante@gmail.com" }]
+keywords = ["tokenizer", "bpe", "byte pair encoding", "nlp", "machine learning"]
 dependencies = [
     "regex>=2026.7.19",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "isort>=8.0.1",
+    "pytest>=9.1.1",
 ]

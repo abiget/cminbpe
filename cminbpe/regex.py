@@ -1,4 +1,7 @@
+from typing import Set
+
 import regex as re
+
 from .base import Tokenizer, get_stats, merge
 
 # the main GPT text split patterns, see
@@ -14,16 +17,26 @@ class RegexTokenizer(Tokenizer):
         super().__init__()
         self.pattern = GPT4_SPLIT_PATTERN if pattern is None else pattern
         self.compiled_pattern = re.compile(self.pattern)
-        self.special_tokens = {}
         self.inverse_special_tokens = {}
 
-    def train(self, text, vocab_size, verbose=False):
+    def train(self, text: str, vocab_size: int, verbose=False):
+        """
+        Chunk-to-chunk consideration is important:
+        Word boundary protection:
+            If the tokenizer allowed a merge like o +  w -> "o w", a single token
+            could swallow the end of one word and the start of the next. This makes
+            it harder for the neural network to learn where words begin and end.
+
+        Space efficiency:
+            Allowing spaces to merge with every possible ending letter (a, b, c, d, ...)
+            would quickly flood the vocabulary with redundant "letter-plus-space" tokens,
+            wasting valuable vocabulary slots.
+        """
         assert vocab_size >= 256
         num_merges = vocab_size - 256
 
         # split the text up into text chunks
         text_chunks = re.findall(self.compiled_pattern, text)
-        # print(text_chunks)
 
         # input text processing
         ids = [list(ch.encode("utf-8")) for ch in text_chunks]
@@ -34,31 +47,17 @@ class RegexTokenizer(Tokenizer):
         for i in range(num_merges):
             # count the number of times every consecutive pair appears
             stats = {}
-            # Chunk-to-chunk consideration is important:
-            #
-            # Word boundary protection:
-            #   If the tokenizer allowed a merge like o +  w -> "o w", a single token
-            #   could swallow the end of one word and the start of the next. This makes
-            #   it harder for the neural network to learn where words begin and end.
-            #
-            # Space efficiency:
-            #   Allowing spaces to merge with every possible ending letter (a, b, c, d, ...)
-            #   would quickly flood the vocabulary with redundant "letter-plus-space" tokens,
-            #   wasting valuable vocabulary slots.
             for chunk_ids in ids:
                 # passing in stas will update it in place, adding up counts
                 get_stats(chunk_ids, stats)
 
-            # if not stats:
-            # no more pairs to merge
-            # break
-            # find the pair with the highest count
+            # no more pairs to merge break
             if not stats:
                 break
             pair = max(stats, key=stats.get)
 
             # mint a new token: assign it the next available id
-            idx = 256 + 1
+            idx = 256 + i
             # replace all occurences of the pair in ids with idx
             ids = [merge(chunk_ids, pair, idx) for chunk_ids in ids]
             # save the merge
@@ -73,12 +72,12 @@ class RegexTokenizer(Tokenizer):
         self.merges = merges
         self.vocab = vocab
 
-    def register_special_tokens(self, special_tokens):
+    def register_special_tokens(self, special_tokens: dict[str, int]):
         # special_tokens is a dict of str -> int
         self.special_tokens = special_tokens
         self.inverse_special_tokens = {v: k for k, v in special_tokens.items()}
 
-    def decode(self, ids):
+    def decode(self, ids: list[int]):
         # given ids (list of integers), return string
         part_bytes = []
         for idx in ids:
@@ -93,7 +92,7 @@ class RegexTokenizer(Tokenizer):
         text = text_bytes.decode("utf-8", errors="replace")
         return text
 
-    def _encode_chunk(self, text_bytes):
+    def _encode_chunk(self, text_bytes: bytes):
         # return the token ids
         # let's begin.  first convert all bytes to integers in range 0..255
         ids = list(text_bytes)
@@ -112,7 +111,7 @@ class RegexTokenizer(Tokenizer):
             ids = merge(ids, pair, idx)
         return ids
 
-    def encode_ordinary(self, text):
+    def encode_ordinary(self, text: str):
         """Encoding that ignores any special tokens."""
         text_chunks = re.findall(self.compiled_pattern, text)
         # all chunks of text are encoded separately, then the result joined
@@ -123,7 +122,7 @@ class RegexTokenizer(Tokenizer):
             ids.extend(chunk_ids)
         return ids
 
-    def encode(self, text, allowed_special="none_raise"):
+    def encode(self, text: str, allowed_special: Set[str] | str = "none_raise"):
         """
         Unlike encode_ordinary, this function handles special tokens.
         allowed_special: can be "all"|"none"|"none_raise" or a custom set of special tokens
@@ -146,19 +145,15 @@ class RegexTokenizer(Tokenizer):
         else:
             raise ValueError(f"allowed_special={allowed_special} not understood")
 
-        special = (
-            allowed_special if isinstance(allowed_special, set) else set(special.keys())
-        )
-        # if not special:
-        #     # shortcut: if no special tokens, just use ordinary encoding
-        #     return self.encode_ordinary(text)
+        if not special:
+            # shortcut: if no special tokens, just use ordinary encoding
+            return self.encode_ordinary(text)
         # otherwise, we have to be careful with potential special tokens in text
         # we handle special tokens by splitting the text
         # based on the occurrence of any exact match with any of the special tokens
         # we can use re.split for this. note that surrounding the pattern with ()
         # makes it into a capturing group, so the special tokens will be included
         special_pattern = "(" + "|".join(re.escape(k) for k in special) + ")"
-        # print(f"special_pattern: {special_pattern}")
         special_chunk = re.split(special_pattern, text)
 
         # now all the special chars are separated from the rest of the text

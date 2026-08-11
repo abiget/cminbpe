@@ -1,9 +1,15 @@
 import unicodedata
 
 
-def get_stats(ids, counts=None):
+def get_stats(ids: list, counts=None) -> dict:
     """
     Given a list of integer ids, return a dictionary of the counts of consecutive pairs of ids.
+    Args:
+        ids: list of integer ids
+        counts: optional existing counts to update
+    Returns:
+        counts: dictionary of counts of consecutive pairs of ids
+
     Example: [1, 2, 3, 2, 3] -> {(1, 2): 1, (2, 3): 2}
     """
     counts = {} if counts is None else counts
@@ -12,10 +18,17 @@ def get_stats(ids, counts=None):
     return counts
 
 
-def merge(ids, pair, idx):
+def merge(ids: list, pair: tuple, idx: int) -> list:
     """
     In the list of interger ids, replace all consecutive occurrences of pair
     with the new integer token idx.
+    Args:
+        ids: list of integer ids
+        pair: tuple of two integers to merge
+        idx: integer token to replace the pair with
+    Returns:
+        new_ids: list of integer ids with the pair replaced by idx
+
     Example: ids = [1, 2, 3, 2, 3], pair = (2, 3), idx = 4 -> [1, 4, 4]
     """
 
@@ -32,6 +45,15 @@ def merge(ids, pair, idx):
 
 
 def replace_control_characters(s: str) -> str:
+    """
+    Replace control characters in a string with their Unicode escape sequences.
+    Args:
+        s: input string
+    Returns:
+        new_s: string with control characters replaced by Unicode escape sequences
+
+    Example: "Hello\x00World" -> "Hello\\u0000World"
+    """
     chars = []
     for ch in s:
         if unicodedata.category(ch)[0] != "C":
@@ -46,6 +68,14 @@ def replace_control_characters(s: str) -> str:
 
 
 def render_token(t: bytes) -> str:
+    """
+    Render a token (bytes) as a string, replacing control characters with their Unicode escape sequences.
+    Args:
+        t: token as bytes
+    Returns:
+        s: token as string
+    Example: b'Hello\x00World' -> 'Hello\\u0000World'
+    """
     s = t.decode("utf-8", errors="replace")
     s = replace_control_characters(s)
     return s
@@ -57,7 +87,8 @@ class Tokenizer:
         self.merges = {}  # (int, int) -> int
         self.pattern = ""  # str
         self.special_tokens = {}  # str -> int, e.g, {'<|endoftext|>': 100257}
-        self.vocab = self._build_vocab()
+        self.vocab = {}
+        # should be empty until train or load is called.
         # int -> bytes, e.g, {0: b'\x00', 1: b'\x01', ...}
 
     def train(self, text, vocab_size, verbose=False):
@@ -84,6 +115,14 @@ class Tokenizer:
         return vocab
 
     def save(self, file_prefix):
+        """
+        Save the tokenizer to a file with the given prefix.  The model is saved in a .model file, and the vocab is saved in a .vocab file.  The .model
+        file contains the merges and special tokens, while the .vocab file contains the vocab for humans to look at.
+        Args:
+            file_prefix: prefix for the files to save, e.g., "tokenizer" will save "tokenizer.model" and "tokenizer.vocab"
+        Returns:
+            None
+        """
         model_file = file_prefix + ".model"
         with open(model_file, "w") as f:
             # write the version, patttern and merges, that's all that's needed
@@ -114,12 +153,19 @@ class Tokenizer:
                     f.write(f"[{s}] {idx}\n")
 
     def load(self, model_file):
+        """
+        Load the tokenizer from a .model file.  The .model file contains the merges and special tokens, while the .vocab file contains the vocab for humans to look at.
+        Args:
+            model_file: path to the .model file to load
+        Returns:
+            None
+        """
         assert model_file.endswith(".model")
 
         merges = {}
-        self.special_tokens = {}
+        special_tokens = {}
         idx = 256
-        with open(model_file, "r", encoding="uft-8") as f:
+        with open(model_file, "r", encoding="utf-8") as f:
             # read version
             version = f.readline().strip()
             assert version == "minbpe v1"
@@ -131,7 +177,7 @@ class Tokenizer:
             # read special tokens
             for _ in range(num_special):
                 special, special_idx = f.readline().strip().split()
-                self.special_tokens[special] = special_idx
+                special_tokens[special] = int(special_idx)
 
             # read the merges
             for line in f:
@@ -139,6 +185,6 @@ class Tokenizer:
                 merges[(idx1, idx2)] = idx
                 idx += 1
 
-            self.merges = merges
-            self.special_tokens = self.special_tokens
-            self.vocab = self._build_vocab()
+        self.merges = merges
+        self.special_tokens = special_tokens
+        self.vocab = self._build_vocab()
