@@ -1,7 +1,7 @@
 [project]
 name = "cminbpe"
 version = "0.1.0"
-description = "A minimal BPE tokenizer implementation with c extensions for speed."
+description = "A minimal BPE tokenizer implementation with C backend for fast training and tokenization."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
