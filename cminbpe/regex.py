@@ -72,6 +72,56 @@ class RegexTokenizer(Tokenizer):
         self.merges = merges
         self.vocab = vocab
 
+    def train_cbackend(
+        self,
+        text: str,
+        vocab_size: int,
+        next_token_idx: int = 256,
+        verbose: bool = False,
+    ):
+        """
+        Train the BPE tokenizer using the C backend for performance.
+
+        This function uses the C implementation of the BPE training algorithm for faster execution.
+        It takes the same parameters as the `train` method and returns the merges dictionary.
+
+        Args:
+            text (str): The input text to train on.
+            vocab_size (int): The desired vocabulary size. It must be greater than or equal to 256.
+            next_token_idx (int, optional): The starting index for new tokens. Defaults to
+            verbose (bool): If True, prints progress information during training.
+        Returns:
+            dict: A dictionary mapping pairs of token IDs to their new merged token ID.
+
+        Example:
+            tokenizer = RegexTokenizer()
+            merges = tokenizer.train_cbackend(text, vocab_size=300, verbose=True)
+        """
+        from ._minbpe import train as c_backend_train
+
+        assert vocab_size >= 256, "vocab_size must be at least 256"
+
+        if len(text) == 0:
+            raise ValueError(
+                "Input text is empty. Please provide valid text for training."
+            )
+
+        # split the text up into text chunks
+        text_chunks = re.findall(self.compiled_pattern, text)
+
+        # input text processing
+        ids = [chunk.encode("utf-8") for chunk in text_chunks]
+
+        # call the C backend train function
+        next_token_idx = 256
+        merges = c_backend_train(ids, vocab_size, verbose, next_token_idx)
+
+        if merges is None:
+            raise RuntimeError(
+                "C backend training failed. Please check the input text and parameters."
+            )
+        return merges
+
     def register_special_tokens(self, special_tokens: dict[str, int]):
         # special_tokens is a dict of str -> int
         self.special_tokens = special_tokens
