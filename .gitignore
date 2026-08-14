@@ -1,8 +1,10 @@
 __pycache__/
-__pycache__/
 .DS_Store
 *.pyc
 *.pytest_cache/
-.venv
 *.egg-info/
+build/
+cminbpe/*.so
+.venv
 .vscode/
+data/
