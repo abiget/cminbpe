@@ -7,15 +7,23 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "abiget", email = "getachewante@gmail.com" }]
 keywords = ["tokenizer", "bpe", "byte pair encoding", "nlp", "machine learning"]
-dependencies = [
-    "regex>=2026.7.19",
-]
+dependencies = ["regex>=2026.7.19"]
+
+[build-system]
+requires = ["setuptools>=77.0.3", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = ["isort>=8.0.1", "pytest>=9.1.1"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cminbpe*"]
+
+[project.urls]
+Homepage = "https://github.com/abiget/cminbpe"
+Repository = "https://github.com/abiget/cminbpe"
+Issues = "https://github.com/abiget/cminbpe/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
-[dependency-groups]
-dev = [
-    "isort>=8.0.1",
-    "pytest>=9.1.1",
-]
