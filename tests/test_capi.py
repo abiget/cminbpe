@@ -20,10 +20,10 @@ def load_test_text(data_path):
 
 
 def test_cminbpe_train_returns_dict(tokenizer):
-    merges = tokenizer.train_cbackend(TEST_TEXT, 300, False)
-    assert isinstance(merges, dict)
-    assert len(merges) >= 0
-    for pair, token_id in merges.items():
+    tokenizer.train_cbackend(TEST_TEXT, 300, False)
+    assert isinstance(tokenizer.merges, dict)
+    assert len(tokenizer.merges) >= 0
+    for pair, token_id in tokenizer.merges.items():
         assert isinstance(pair, tuple)
         assert len(pair) == 2
         assert all(isinstance(v, int) for v in pair)
@@ -35,6 +35,12 @@ def test_cminbpe_train_on_realistic_text(tokenizer):
         os.path.dirname(os.path.abspath(__file__)), "taylorswift.txt"
     )
     text = load_test_text(data_path)
-    merges = tokenizer.train_cbackend(text, 300, False)
-    assert isinstance(merges, dict)
-    assert len(merges) > 0
+    tokenizer.train_cbackend(text, 300, False)
+    assert isinstance(tokenizer.merges, dict)
+    assert len(tokenizer.merges) > 0
+
+
+def test_cminbpe_train_with_empty_text(tokenizer):
+    empty_text = ""
+    with pytest.raises(ValueError):
+        tokenizer.train_cbackend(empty_text, 300, False)
