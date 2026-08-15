@@ -638,8 +638,273 @@ static PyObject *pack_merge_maps_to_dict(khash_t(merge) * merge_maps)
     return result;
 }
 
+static void populate_merge_maps_from_dict(khash_t(merge) * merge_maps, PyObject *merges_dict)
+{
+    /**
+     * Populate the merge_maps hash map from a Python dictionary of merges.
+     *
+     * @param merge_maps: A hash map that maps merged pair keys to their assigned vocabulary IDs.
+     * @param merges_dict: A Python dictionary representing the merge mappings.
+     */
+    PyObject *key, *value;
+    Py_ssize_t pos = 0;
+
+    while (PyDict_Next(merges_dict, &pos, &key, &value))
+    {
+        if (!PyTuple_Check(key) || PyTuple_Size(key) != 2)
+        {
+            PyErr_SetString(PyExc_TypeError, "merges dict keys must be tuples of length 2");
+            return;
+        }
+
+        uint32_t left = (uint32_t)PyLong_AsUnsignedLong(PyTuple_GetItem(key, 0));
+        uint32_t right = (uint32_t)PyLong_AsUnsignedLong(PyTuple_GetItem(key, 1));
+        uint32_t vocab_id = (uint32_t)PyLong_AsUnsignedLong(value);
+
+        uint64_t pair_key = make_unique_key(left, right);
+        int ret;
+        khiter_t k = kh_put(merge, merge_maps, pair_key, &ret);
+        if (ret < 0)
+        {
+            PyErr_SetString(PyExc_RuntimeError, "Failed to insert into merge_maps");
+            return;
+        }
+        kh_val(merge_maps, k) = vocab_id;
+    }
+}
+static bool find_highest_priority_pair_to_merge_in_chunk(Chunk *chunk, khash_t(merge) * merge_maps, uint64_t *out_key, uint32_t *out_vocab_id)
+{
+    /**
+     * Find the highest priority pair to merge in a given chunk based on the merge_maps.
+     *
+     * @param chunk: A pointer to the Chunk structure to scan.
+     * @param merge_maps: A hash map that maps merged pair keys to their assigned vocabulary IDs.
+     */
+    uint32_t lowest_available_id = UINT32_MAX;
+    uint64_t best_key = 0;
+    bool found = false;
+
+    for (size_t j = 0; j + 1 < chunk->len; j++)
+    {
+        uint32_t left = chunk->tokens[j];
+        uint32_t right = chunk->tokens[j + 1];
+        uint64_t key = make_unique_key(left, right);
+
+        khiter_t k = kh_get(merge, merge_maps, key);
+        if (k != kh_end(merge_maps))
+        {
+            // get the pair with the lowest vocab_id (highest priority)
+            uint32_t vocab_id = (uint32_t)kh_val(merge_maps, k);
+
+            if (!found || vocab_id < lowest_available_id)
+            {
+                lowest_available_id = vocab_id;
+                best_key = key;
+                found = true;
+            }
+        }
+    }
+
+    if (found)
+    {
+        *out_key = best_key;
+        *out_vocab_id = lowest_available_id;
+    }
+
+    return found;
+}
+static PyObject *pack_token_ids_to_list(uint32_t *token_ids, size_t len)
+{
+    /**
+     * Convert an array of token IDs to a Python list.
+     *
+     * @param token_ids: An array of uint32_t token IDs.
+     * @param len: The length of the token_ids array.
+     * @return: A Python list of token IDs, or NULL on failure (with an appropriate Python exception set).
+     */
+    PyObject *result_list = PyList_New((Py_ssize_t)len);
+    if (result_list == NULL)
+        return NULL;
+
+    for (size_t i = 0; i < len; i++)
+    {
+        PyObject *token_id = PyLong_FromUnsignedLong(token_ids[i]);
+        if (token_id == NULL)
+        {
+            Py_DECREF(result_list);
+            return NULL;
+        }
+        PyList_SET_ITEM(result_list, (Py_ssize_t)i, token_id);
+    }
+
+    return result_list;
+}
+static void encode_chunk_inplace(Chunk *chunk, khash_t(merge) * merge_maps)
+{
+    /**
+     * Encode a Chunk using the trained BPE model represented by merge_maps.
+     * This function modifies the chunk in place, replacing pairs of tokens with their corresponding vocab IDs based on the merge_maps.
+     *
+     * @param chunk: A pointer to the Chunk structure to encode.
+     * @param merge_maps: A hash map that maps merged pair keys to their assigned vocabulary IDs.
+     */
+
+    while (chunk->len >= 2)
+    {
+        uint64_t best_key;
+        uint32_t best_vocab_id;
+
+        if (!find_highest_priority_pair_to_merge_in_chunk(chunk, merge_maps, &best_key, &best_vocab_id))
+            break;
+
+        uint32_t best_left = (uint32_t)(best_key >> 32);
+        uint32_t best_right = (uint32_t)(best_key & 0xffffffffu);
+
+        merge_pair_in_chunk(chunk, best_left, best_right, best_vocab_id);
+    }
+}
+static PyObject *encode_bpe(PyObject *self, PyObject *args)
+{
+    /**
+     * Encode a list of bytes chunks using the trained BPE model. [b'hello', b'world', ...]
+     *
+     * @param self: The module object (not used).
+     * @param args: A tuple containing the arguments passed from Python.
+     *              Expected to contain a list of byte chunks and a dictionary of merges.
+     * @return: A Python list of token IDs representing the encoded text, or NULL on failure (with an appropriate Python exception set).
+     */
+
+    PyObject *chunks_list;
+    PyObject *merges_dict;
+
+    if (!PyArg_ParseTuple(args, "OO", &chunks_list, &merges_dict))
+        return NULL;
+
+    if (!PyList_Check(chunks_list))
+    {
+        PyErr_SetString(PyExc_TypeError, "chunks must be a list");
+        return NULL;
+    }
+
+    if (!PyDict_Check(merges_dict))
+    {
+        PyErr_SetString(PyExc_TypeError, "merges must be a dict");
+        return NULL;
+    }
+
+    // convert chunks to an array of Chunk structures
+    Py_ssize_t num_chunks = PyList_Size(chunks_list);
+    Chunk *token_chunks = calloc((size_t)num_chunks, sizeof(Chunk));
+    if (token_chunks == NULL)
+        return PyErr_NoMemory();
+
+    for (Py_ssize_t i = 0; i < num_chunks; i++)
+    {
+        PyObject *chunk_bytes = PyList_GET_ITEM(chunks_list, i);
+
+        if (store_chunk_from_bytes(chunk_bytes, &token_chunks[i]) < 0)
+        {
+            free_chunks(token_chunks, i);
+            return NULL;
+        }
+    }
+
+    // convert merges dict to a khash_t(merge) structure
+    khash_t(merge) *merge_maps = kh_init(merge);
+
+    if (merge_maps == NULL)
+    {
+        free_chunks(token_chunks, num_chunks);
+        return PyErr_NoMemory();
+    }
+
+    // populate merge_maps from the merges dict
+    populate_merge_maps_from_dict(merge_maps, merges_dict);
+    if (PyErr_Occurred())
+    {
+        free_chunks(token_chunks, num_chunks);
+        Py_DECREF(merges_dict);
+        return NULL;
+    }
+    size_t capacity = 1024;
+    size_t out_len = 0;
+    uint32_t *token_ids = malloc(sizeof(uint32_t) * capacity);
+
+    if (token_ids == NULL)
+    {
+        free_chunks(token_chunks, num_chunks);
+        kh_destroy(merge, merge_maps);
+        return PyErr_NoMemory();
+    }
+
+    for (Py_ssize_t i = 0; i < num_chunks; i++)
+    {
+        Chunk *chunk = &token_chunks[i];
+        // encode each chunk using the merge_maps:
+        encode_chunk_inplace(chunk, merge_maps);
+
+        if (out_len + chunk->len > capacity)
+        {
+            // resize the token_ids array if needed
+            while (out_len + chunk->len > capacity)
+                capacity *= 2;
+            uint32_t *new_token_ids = realloc(token_ids, sizeof(uint32_t) * capacity);
+            if (new_token_ids == NULL)
+            {
+                free_chunks(token_chunks, num_chunks);
+                kh_destroy(merge, merge_maps);
+                free(token_ids);
+                return PyErr_NoMemory();
+            }
+
+            token_ids = new_token_ids;
+        }
+
+        // copy the tokens from the chunk to the token_ids array
+        memcpy(token_ids + out_len, chunk->tokens, sizeof(uint32_t) * chunk->len);
+        out_len += chunk->len;
+    }
+
+    // free the allocated memory for chunks and merge_maps
+    kh_destroy(merge, merge_maps);
+
+    // pack the token_ids array into a Python list to return
+    PyObject *result_list = pack_token_ids_to_list(token_ids, out_len);
+    if (result_list == NULL)
+    {
+        free(token_ids);
+        return NULL;
+    }
+
+    // track the chunk's token ids sizes in a Python list to return
+    PyObject *chunks_sizes = PyList_New(num_chunks);
+    if (chunks_sizes == NULL)
+    {
+        free(token_ids);
+        Py_DECREF(result_list);
+        return NULL;
+    }
+
+    for (Py_ssize_t i = 0; i < num_chunks; i++)
+    {
+        PyObject *size_obj = PyLong_FromSize_t(token_chunks[i].len);
+        if (size_obj == NULL)
+        {
+            free(token_ids);
+            Py_DECREF(result_list);
+            Py_DECREF(chunks_sizes);
+            return NULL;
+        }
+        PyList_SET_ITEM(chunks_sizes, i, size_obj);
+    }
+
+    free_chunks(token_chunks, num_chunks);
+    free(token_ids);
+    return PyTuple_Pack(2, result_list, chunks_sizes);
+}
 static PyMethodDef MinBPEMethods[] = {
     {"train", train_bpe, METH_VARARGS, "Train BPE on a list of byte chunks."},
+    {"encode", encode_bpe, METH_VARARGS, "Encode text using the trained BPE model."},
     {NULL, NULL, 0, NULL} // Sentinel
 };
 
