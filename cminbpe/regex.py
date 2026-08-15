@@ -18,6 +18,9 @@ class RegexTokenizer(Tokenizer):
         self.pattern = GPT4_SPLIT_PATTERN if pattern is None else pattern
         self.compiled_pattern = re.compile(self.pattern)
         self.inverse_special_tokens = {}
+        self._special_pattern = None  # compiled regex pattern for special tokens
+        # frozenset of special tokens used to compile the special pattern, used to avoid recompiling the same pattern
+        self._special_pattern_key = None
 
     def train(self, text: str, vocab_size: int, verbose=False):
         """
@@ -120,7 +123,155 @@ class RegexTokenizer(Tokenizer):
             raise RuntimeError(
                 "C backend training failed. Please check the input text and parameters."
             )
-        return merges
+        self.merges = merges
+
+    def _split_and_encode_chunks(self, text: str):
+        """
+        Split the input text into chunks based on the compiled
+        regex pattern and encode each chunk into a list of bytes.
+
+        Args:
+            text (str): The input text to split and encode.
+        Returns:
+            list: A list of lists, where each inner list contains the byte representation of a chunk of text.
+        """
+        # split the text up into text chunks
+        text_chunks = re.findall(self.compiled_pattern, text)
+        # encoding the text chunks into bytes
+        bytes_list = [chunk.encode("utf-8") for chunk in text_chunks]
+        return bytes_list
+
+    def encode_cbackend(self, bytes_list: list[bytes]):
+        """
+        Encode the input text using the C backend for performance.
+
+        This function uses the C implementation of the BPE encoding algorithm for faster execution.
+        It takes the input text and returns a list of token IDs.
+
+        Args:
+            bytes_list (list[bytes]): A list of lists, where each inner list contains the byte representation of a chunk of text.
+        Returns:
+            list: A list of token IDs representing the encoded text.
+        Example:
+            tokenizer = RegexTokenizer()
+            token_ids = tokenizer.encode_cbackend(text)
+        """
+
+        from ._minbpe import encode as c_backend_encode
+
+        # call the C backend encode function
+        token_ids = c_backend_encode(bytes_list, self.merges)
+
+        return token_ids
+
+    def _resolve_special_tokens(self, allowed_special: Set[str] | str, text: str):
+        """
+        Resolve the special tokens based on the allowed_special parameter and the input text.
+        Args:
+            allowed_special (Set[str] | str): A set of allowed special tokens or a string indicating the allowed special tokens ("all", "none", "none_raise").
+            text (str): The input text to check for special tokens.
+        Returns:
+            dict: A dictionary of resolved special tokens (str -> int) based on the allowed_special parameter and the input text.
+        """
+        if allowed_special == "all":
+            return self.special_tokens
+        elif allowed_special == "none":
+            return {}
+        elif allowed_special == "none_raise":
+            assert all(
+                token not in text for token in self.special_tokens
+            ), "Special tokens found in text when allowed_special is set to 'none_raise'."
+            return {}
+        elif isinstance(allowed_special, set):
+            return {
+                k: v for k, v in self.special_tokens.items() if k in allowed_special
+            }
+        else:
+            raise ValueError(f"allowed_special={allowed_special} not understood")
+
+    def _get_special_pattern(self, special: Set[str]):
+        """
+        Get a compiled regex pattern for the given special tokens.
+        This function caches the compiled pattern to avoid recompilation for the same set of special tokens.
+        Args:
+            special (Set[str]): A set of special tokens.
+        Returns:
+            re.Pattern: A compiled regex pattern that matches any of the special tokens.
+        """
+        key = frozenset(special)
+        if self._special_pattern_key != key:
+            ordered = sorted(
+                special, key=len, reverse=True
+            )  # sort by length to avoid partial matches
+            self._special_pattern = re.compile(
+                "(" + "|".join(re.escape(k) for k in ordered) + ")"
+            )
+            self._special_pattern_key = key
+
+        return self._special_pattern
+
+    def encode_cbackend_specials(
+        self, text: str, allowed_special: Set[str] | str = "none_raise"
+    ):
+        """
+        Encode the input text using the C backend while handling special tokens.
+
+        Args:
+            text (str): The input text to encode.
+            allowed_special (Set[str] | str): A set of allowed special tokens or a string indicating the allowed special tokens ("all", "none", "none_raise").
+        Returns:
+            list: A list of token IDs representing the encoded text, including special tokens if present.
+        """
+        special = self._resolve_special_tokens(allowed_special, text)
+        if not special:
+            chunk_bytes = self._split_and_encode_chunks(text)
+            return self.encode_cbackend(chunk_bytes)[0]  # return only the token ids
+
+        # otherwise, we have to be careful with potential special tokens in text
+        special_pattern = self._get_special_pattern(special)
+        segments = re.split(special_pattern, text)
+
+        # flat list of all ordinary byte segments to be encoded
+        all_byte_chunks = []
+        # number of ordinary chunk bytes per segment, to be used later to reconstruct the final token ids
+        segment_sizes = []
+        # types of each segment ('special', id) or ('ordinary', None)
+        segment_types = []
+
+        for segment in segments:
+            if segment in special:
+                segment_types.append(("special", special[segment]))
+            else:
+                segment_bytes = self._split_and_encode_chunks(segment)
+                segment_types.append(("ordinary", None))
+                all_byte_chunks.extend(segment_bytes)
+                segment_sizes.append(len(segment_bytes))
+
+        # encode all ordinary byte chunks using the C backend
+        flat_ids, chunks_sizes = self.encode_cbackend(all_byte_chunks)
+
+        if flat_ids is None or chunks_sizes is None:
+            raise RuntimeError(
+                "C backend encoding failed. Please check the input text and merges."
+            )
+
+        seg_iter = iter(segment_sizes)
+        offset = [0]
+        for size in chunks_sizes:
+            offset.append(offset[-1] + size)
+
+        # reconstruct the final token ids based on segment types and sizes
+        final_ids = []
+        chunk_ptr = 0
+        for i, (segment_type, segment_value) in enumerate(segment_types):
+            if segment_type == "special":
+                final_ids.append(segment_value)
+            else:  # 'ordinary'
+                n = next(seg_iter)  # number of ordinary chunks in this segment
+                final_ids.extend(flat_ids[offset[chunk_ptr] : offset[chunk_ptr + n]])
+                chunk_ptr += n
+
+        return final_ids
 
     def register_special_tokens(self, special_tokens: dict[str, int]):
         # special_tokens is a dict of str -> int
