@@ -106,13 +106,13 @@ class Tokenizer:
     def _build_vocab(self):
         # Vocab is simply and deterministically derived from merges
         vocab = {idx: bytes([idx]) for idx in range(256)}
-        for (p0, p1), idx in self.merges.items():
+        for (p0, p1), idx in sorted(self.merges.items(), key=lambda kv: kv[1]):
             vocab[idx] = vocab[p0] + vocab[p1]
 
         for special, idx in self.special_tokens.items():
             vocab[idx] = special.encode("utf-8")
 
-        return vocab
+        self.vocab = vocab
 
     def save(self, file_prefix):
         """
@@ -187,4 +187,4 @@ class Tokenizer:
 
         self.merges = merges
         self.special_tokens = special_tokens
-        self.vocab = self._build_vocab()
+        self._build_vocab()
