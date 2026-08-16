@@ -22,7 +22,7 @@ class RegexTokenizer(Tokenizer):
         # frozenset of special tokens used to compile the special pattern, used to avoid recompiling the same pattern
         self._special_pattern_key = None
 
-    def train(self, text: str, vocab_size: int, verbose=False):
+    def _train_python(self, text: str, vocab_size: int, verbose=False):
         """
         Chunk-to-chunk consideration is important:
         Word boundary protection:
@@ -75,7 +75,7 @@ class RegexTokenizer(Tokenizer):
         self.merges = merges
         self.vocab = vocab
 
-    def train_cbackend(
+    def _train_cbackend(
         self,
         text: str,
         vocab_size: int,
@@ -103,6 +103,7 @@ class RegexTokenizer(Tokenizer):
         from ._minbpe import train as c_backend_train
 
         assert vocab_size >= 256, "vocab_size must be at least 256"
+        assert next_token_idx >= 256, "next_token_idx must be at least 256"
 
         if len(text) == 0:
             raise ValueError(
@@ -112,11 +113,8 @@ class RegexTokenizer(Tokenizer):
         # split the text up into text chunks
         text_chunks = re.findall(self.compiled_pattern, text)
 
-        # input text processing
         ids = [chunk.encode("utf-8") for chunk in text_chunks]
 
-        # call the C backend train function
-        next_token_idx = 256
         merges = c_backend_train(ids, vocab_size, verbose, next_token_idx)
 
         if merges is None:
@@ -124,6 +122,32 @@ class RegexTokenizer(Tokenizer):
                 "C backend training failed. Please check the input text and parameters."
             )
         self.merges = merges
+        self._build_vocab()
+
+    def train(self, text: str, vocab_size: int, backend: str = "python", verbose=False):
+        """
+        Train the BPE tokenizer using the specified backend.
+
+        Args:
+            text (str): The input text to train on.
+            vocab_size (int): The desired vocabulary size. It must be greater than or equal to 256.
+            backend (str): The backend to use for training. Supported values are "python" and "c". Defaults to "python".
+            verbose (bool): If True, prints progress information during training.
+        Returns:
+            None: The function updates the tokenizer's merges and vocab attributes in place.
+
+        Example:
+            tokenizer = RegexTokenizer()
+            tokenizer.train(text, vocab_size=300, backend="c", verbose=True)
+        """
+        if backend == "python":
+            self._train_python(text, vocab_size, verbose=verbose)
+        elif backend == "c":
+            self._train_cbackend(text, vocab_size, verbose=verbose)
+        else:
+            raise ValueError(
+                f"Invalid backend '{backend}'. Supported backends are 'python' and 'c'."
+            )
 
     def _split_and_encode_chunks(self, text: str):
         """
@@ -141,7 +165,7 @@ class RegexTokenizer(Tokenizer):
         bytes_list = [chunk.encode("utf-8") for chunk in text_chunks]
         return bytes_list
 
-    def encode_cbackend(self, bytes_list: list[bytes]):
+    def _encode_bytes_cbackend(self, bytes_list: list[bytes]):
         """
         Encode the input text using the C backend for performance.
 
@@ -154,13 +178,18 @@ class RegexTokenizer(Tokenizer):
             list: A list of token IDs representing the encoded text.
         Example:
             tokenizer = RegexTokenizer()
-            token_ids = tokenizer.encode_cbackend(text)
+            token_ids = tokenizer._encode_bytes_cbackend(bytes_list)
         """
 
         from ._minbpe import encode as c_backend_encode
 
         # call the C backend encode function
         token_ids = c_backend_encode(bytes_list, self.merges)
+
+        if token_ids is None:
+            raise RuntimeError(
+                "C backend encoding failed. Please check the input text and merges."
+            )
 
         return token_ids
 
@@ -210,7 +239,7 @@ class RegexTokenizer(Tokenizer):
 
         return self._special_pattern
 
-    def encode_cbackend_specials(
+    def _encode_cbackend_specials(
         self, text: str, allowed_special: Set[str] | str = "none_raise"
     ):
         """
@@ -225,7 +254,8 @@ class RegexTokenizer(Tokenizer):
         special = self._resolve_special_tokens(allowed_special, text)
         if not special:
             chunk_bytes = self._split_and_encode_chunks(text)
-            return self.encode_cbackend(chunk_bytes)[0]  # return only the token ids
+            # return only the token ids
+            return self._encode_bytes_cbackend(chunk_bytes)[0]
 
         # otherwise, we have to be careful with potential special tokens in text
         special_pattern = self._get_special_pattern(special)
@@ -248,7 +278,7 @@ class RegexTokenizer(Tokenizer):
                 segment_sizes.append(len(segment_bytes))
 
         # encode all ordinary byte chunks using the C backend
-        flat_ids, chunks_sizes = self.encode_cbackend(all_byte_chunks)
+        flat_ids, chunks_sizes = self._encode_bytes_cbackend(all_byte_chunks)
 
         if flat_ids is None or chunks_sizes is None:
             raise RuntimeError(
@@ -277,21 +307,6 @@ class RegexTokenizer(Tokenizer):
         # special_tokens is a dict of str -> int
         self.special_tokens = special_tokens
         self.inverse_special_tokens = {v: k for k, v in special_tokens.items()}
-
-    def decode(self, ids: list[int]):
-        # given ids (list of integers), return string
-        part_bytes = []
-        for idx in ids:
-            if idx in self.vocab:
-                part_bytes.append(self.vocab[idx])
-            elif idx in self.inverse_special_tokens:
-                part_bytes.append(self.inverse_special_tokens[idx].encode("utf-8"))
-            else:
-                raise ValueError(f"invalid token id: {idx}")
-
-        text_bytes = b"".join(part_bytes)
-        text = text_bytes.decode("utf-8", errors="replace")
-        return text
 
     def _encode_chunk(self, text_bytes: bytes):
         # return the token ids
@@ -323,7 +338,7 @@ class RegexTokenizer(Tokenizer):
             ids.extend(chunk_ids)
         return ids
 
-    def encode(self, text: str, allowed_special: Set[str] | str = "none_raise"):
+    def _encode_python(self, text: str, allowed_special: Set[str] | str = "none_raise"):
         """
         Unlike encode_ordinary, this function handles special tokens.
         allowed_special: can be "all"|"none"|"none_raise" or a custom set of special tokens
@@ -368,3 +383,46 @@ class RegexTokenizer(Tokenizer):
                 ids.extend(self.encode_ordinary(part))
 
         return ids
+
+    def encode(
+        self,
+        text: str,
+        allowed_special: Set[str] | str = "none_raise",
+        backend: str = "python",
+    ):
+        """
+        Wrapper for encoding that handles special tokens and allows for backend selection.
+
+        Args:
+            text (str): The input text to encode.
+            allowed_special (Set[str] | str): A set of allowed special tokens or a string indicating the allowed special tokens ("all", "none", "none_raise").
+            backend (str): The backend to use for encoding. Supported values are "python" and "c". Defaults to "python".
+        Returns:
+            list: A list of token IDs representing the encoded text, including special tokens if present.
+
+        Example:
+            tokenizer = RegexTokenizer()
+            token_ids = tokenizer.encode(text, allowed_special="all", backend="c")
+        """
+        if backend == "python":
+            return self._encode_python(text, allowed_special=allowed_special)
+        elif backend == "c":
+            return self._encode_cbackend_specials(text, allowed_special=allowed_special)
+        else:
+            raise ValueError(
+                f"Invalid backend '{backend}'. Supported backends are 'python' and 'c'."
+            )
+
+    def decode(self, ids: list[int]):
+        part_bytes = []
+        for idx in ids:
+            if idx in self.vocab:
+                part_bytes.append(self.vocab[idx])
+            elif idx in self.inverse_special_tokens:
+                part_bytes.append(self.inverse_special_tokens[idx].encode("utf-8"))
+            else:
+                raise ValueError(f"invalid token id: {idx}")
+
+        text_bytes = b"".join(part_bytes)
+        text = text_bytes.decode("utf-8", errors="replace")
+        return text
