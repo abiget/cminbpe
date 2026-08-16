@@ -1,4 +1,5 @@
 import os
+from itertools import islice
 
 import pytest
 
@@ -36,8 +37,8 @@ def load_test_text(data_path):
         return f.read()
 
 
-def test_cminbpe_train_returns_dict(tokenizer):
-    tokenizer.train_cbackend(TEST_TEXT, 300, False)
+def test_cminbpe_train_set_meges(tokenizer):
+    tokenizer.train(TEST_TEXT, 300, backend="c", verbose=False)
     assert isinstance(tokenizer.merges, dict)
     assert len(tokenizer.merges) >= 0
     for pair, token_id in tokenizer.merges.items():
@@ -49,7 +50,7 @@ def test_cminbpe_train_returns_dict(tokenizer):
 
 def test_cminbpe_train_on_realistic_text(tokenizer):
     text = load_test_text(data_path)
-    tokenizer.train_cbackend(text, 300, False)
+    tokenizer.train(text, 300, backend="c", verbose=False)
     assert isinstance(tokenizer.merges, dict)
     assert len(tokenizer.merges) > 0
 
@@ -57,34 +58,39 @@ def test_cminbpe_train_on_realistic_text(tokenizer):
 def test_cminbpe_train_with_empty_text(tokenizer):
     empty_text = ""
     with pytest.raises(ValueError):
-        tokenizer.train_cbackend(empty_text, 300, False)
+        tokenizer.train(empty_text, 300, backend="c", verbose=False)
 
 
 def test_cminbpe_encode_decode(tokenizer):
-    tokenizer.train_cbackend(TEST_TEXT, 300, verbose=False)
-    tokenizer._build_vocab()
-    encoded = tokenizer.encode_cbackend_specials(TEST_TEXT)
+    tokenizer.train(TEST_TEXT, 300, backend="c", verbose=False)
+    encoded = tokenizer.encode(TEST_TEXT, backend="c")
     decoded = tokenizer.decode(encoded)
     assert decoded == TEST_TEXT
 
 
 def test_cminbpe_encode_decode_with_special_tokens(tokenizer):
-    tokenizer.train_cbackend(TEST_TEXT, 300, verbose=False)
-    tokenizer._build_vocab()
+    tokenizer.train(TEST_TEXT, 300, backend="c", verbose=False)
     special_tokens = set(["<PAD>", "<UNK>", "<EOS>"])
-    encoded = tokenizer.encode_cbackend_specials(
-        TEST_TEXT, allowed_special=special_tokens
-    )
+    encoded = tokenizer.encode(TEST_TEXT, allowed_special=special_tokens, backend="c")
     decoded = tokenizer.decode(encoded)
     assert decoded == TEST_TEXT
 
 
 def test_cminbpe_encode_decode_with_special_tokens_llama_like_test(tokenizer):
-    tokenizer.train_cbackend(llama_text, 300, verbose=False)
-    tokenizer._build_vocab()
+    tokenizer.train(llama_text, 300, backend="c", verbose=False)
     tokenizer.register_special_tokens(special_tokens)
-    encoded = tokenizer.encode_cbackend_specials(
-        llama_text, allowed_special=set(special_tokens.keys())
+    encoded = tokenizer.encode(
+        llama_text, allowed_special=set(islice(special_tokens, 3)), backend="c"
     )
+    decoded = tokenizer.decode(encoded)
+    assert decoded == llama_text
+
+
+def test_cminbpe_encode_decode_with_special_tokens_llama_like_test_allowed_special(
+    tokenizer,
+):
+    tokenizer.train(llama_text, 300, backend="c", verbose=False)
+    tokenizer.register_special_tokens(special_tokens)
+    encoded = tokenizer.encode(llama_text, allowed_special="all", backend="c")
     decoded = tokenizer.decode(encoded)
     assert decoded == llama_text
