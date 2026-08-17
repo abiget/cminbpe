@@ -32,14 +32,14 @@ def benchmark_tokenizer(
     tokenizer.train(train_text, vocab_size, backend=backend, verbose=verbose)
     end_time = time.time()
     print(
-        f"MinBPE {backend.capitalize()} Implementation Training completed in {end_time - start_time:.2f} seconds."
+        f"MinBPE {backend.capitalize()} Implementation Training completed in {end_time - start_time:.6f} seconds."
     )
 
     start_time = time.time()
     encoded = tokenizer.encode(test_string, backend=backend)
     end_time = time.time()
     print(
-        f"MinBPE {backend.capitalize()} Implementation Encoding completed in {end_time - start_time:.2f} seconds."
+        f"MinBPE {backend.capitalize()} Implementation Encoding completed in {end_time - start_time:.6f} seconds."
     )
     decoded = tokenizer.decode(encoded)
     assert (
