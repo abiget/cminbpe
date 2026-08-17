@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A minimal BPE tokenizer implementation with C backend for fast training and tokenization."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "abiget", email = "getachewante@gmail.com" }]
 keywords = ["tokenizer", "bpe", "byte pair encoding", "nlp", "machine learning"]
 dependencies = ["regex>=2026.7.19"]
@@ -14,11 +14,14 @@ requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [dependency-groups]
-dev = ["isort>=8.0.1", "pytest>=9.1.1"]
+dev = ["datasets>=5.0.1", "isort>=8.0.1", "pytest>=9.1.1"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cminbpe*"]
+
+[tool.setuptools.package-data]
+cminbpe = ["khash.h"]
 
 [project.urls]
 Homepage = "https://github.com/abiget/cminbpe"
