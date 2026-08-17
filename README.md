@@ -94,7 +94,7 @@ On the bundled wikitext using its train set benchmark (`benchmark.py`) with `SIZ
 | Python | 1443.605064 s | 0.000279 s |
 | C | 1.620584 s | 0.001395 s |
 
-That is about an 890.7x training speedup. The encoding microbenchmark is too small to be representative here, and in this run the C path is slower because the measurement is dominated by overhead since the text to be encoded is small text, which the overhead is much larger than the optimization but for larger text it would be quite the opposite.
+That is about an 890.7x training speedup. The encoding microbenchmark is too small to be representative. In this run, the C path appears slower because the measurement is dominated by fixed overhead, which outweighs the optimization benefits for such a small input. With larger texts, the C implementation should provide a significant encoding speedup.
 
 ## API
 
