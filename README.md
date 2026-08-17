@@ -87,14 +87,14 @@ On each iteration, only the chunks that actually contain the winning pair are re
 
 ### Speedup
 
-On the bundled wikitext benchmark (`benchmark.py`) with `SIZE_LIMIT=1000` and `vocab_size=10000`, the results were:
+On the bundled wikitext using its train set benchmark (`benchmark.py`) with `SIZE_LIMIT=1000` lines  and `vocab_size=10000`, the results were:
 
 | Backend | Training | Encoding |
 |---|---:|---:|
-| Python | 1348.31 s | 0.00 s |
-| C | 1.50 s | 0.00 s |
+| Python | 1443.605064 s | 0.000279 s |
+| C | 1.620584 s | 0.001395 s |
 
-That is about a 899x training speedup, while preserving the same roundtrip decode result.
+That is about an 890.7x training speedup. The encoding microbenchmark is too small to be representative here, and in this run the C path is slower because the measurement is dominated by overhead.
 
 ## API
 
