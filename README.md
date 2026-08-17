@@ -99,7 +99,7 @@ That is about a 899x training speedup, while preserving the same roundtrip decod
 ## API
 
 | Method | Description |
-|---|---|
+| --- | ---|
 | `RegexTokenizer(pattern=None)` | Construct a tokenizer. Defaults to the GPT-4-style split pattern; pass a custom `pattern` to override. |
 | `train(text, vocab_size, backend="python", verbose=False)` | Learn merges on `text` up to `vocab_size` (must be ≥ 256). Populates both `self.merges` and `self.vocab`. `backend="c"` uses the incremental pair-tracking implementation described above; `backend="python"` is the plain reference loop. |
 | `encode(text, allowed_special="none_raise", backend="python")` | Encode `text` into a list of token ids. `backend="c"` batches ordinary text into a single call into the C extension for speed and reassembles special-token ids into their original positions; `backend="python"` is the reference chunk-by-chunk implementation. See **Special tokens** below for `allowed_special`. |
